@@ -1,3 +1,4 @@
+use std::fmt::{Display, Formatter};
 use std::ops::{IndexMut, Index};
 
 #[derive(Clone, Copy, Debug)]
@@ -62,5 +63,11 @@ impl Index<VRegister> for [u8] {
 impl IndexMut<VRegister> for [u8] {
     fn index_mut(&mut self, reg: VRegister) -> &mut Self::Output {
         self.get_mut(reg as usize).unwrap()
+    }
+}
+
+impl Display for VRegister {
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), std::fmt::Error> {
+        write!(f, "{self:?}")
     }
 }

@@ -1,7 +1,8 @@
-pub mod isa;
+mod isa;
+mod screen;
+mod memory;
+mod ticker;
+mod address;
+mod register;
+
 pub mod cpu;
-pub mod screen;
-pub mod memory;
-pub mod ticker;
-pub mod address;
-pub mod register;

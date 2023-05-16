@@ -1,4 +1,5 @@
 use crate::{address::Address, register::VRegister};
+use std::fmt::{Display, Formatter};
 
 #[derive(Debug)]
 pub enum Instruction {
@@ -100,12 +101,12 @@ pub enum Instruction {
     /// `Fx1E` - `ADD I, Vx`: Set `I` = `I` + `Vx`. The values of `I` and `Vx` 
     /// are added, and the results are stored in `I`.
     AddI(VRegister),
-    /// `Fx29` - `LD F, Vx`: Set `I` = location of sprite for digit `Vx`. The 
+    /// `Fx29` - `LD I, Vx`: Set `I` = location of sprite for digit `Vx`. The 
     /// value of I is set to the location for the hexadecimal sprite 
     /// corresponding to the value of `Vx`. See section 2.4, Display, for more 
     /// information on the Chip-8 hexadecimal font.
-    LoadSprite(u8),
-    /// `Fx33` - `LD B, Vx`: Store BCD representation of `Vx` in memory 
+    LoadSprite(VRegister),
+    /// `Fx33` - `LD I, Vx`: Store BCD representation of `Vx` in memory 
     /// locations `I`, `I+1`, and `I+2`. The interpreter takes the decimal value 
     /// of `Vx`, and places the hundreds digit in memory at location in `I`, the 
     /// tens digit at location `I+1`, and the ones digit at location `I+2`.
@@ -122,6 +123,44 @@ pub enum Instruction {
     /// added it regardless as a placeholder for instructions that are not yet 
     /// implemented by this interpreter. 
     Nop
+}
+
+impl Display for Instruction {
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), std::fmt::Error> {
+        use Instruction::*;
+
+        match self {
+            ClearScreen => write!(f, "CLS"),
+            Return => write!(f, "RET"),
+            Jump(addr) => write!(f, "JP {addr}"),
+            Call(addr) => write!(f, "CALL {addr}"),
+            SkipIfEqualImm(vx, b) => write!(f, "SE {vx}, {b}"),
+            SkipIfNotEqualImm(vx, b) => write!(f, "SNE {vx}, {b}"),
+            SkipIfEqual(vx, vy) => write!(f, "SE {vx}, {vy}"), 
+            LoadImm(vx, b) => write!(f, "LD {vx}, {b}"),
+            AddImm(vx, b) => write!(f, "ADD {vx}, {b}"),
+            Move(vx, vy) => write!(f, "LD {vx}, {vy}"), 
+            Or(vx, vy) => write!(f, "OR {vx}, {vy}"),
+            And(vx, vy) => write!(f, "AND {vx}, {vy}"),
+            Xor(vx, vy) => write!(f, "XOR {vx}, {vy}"),
+            Add(vx, vy) => write!(f, "AND {vx}, {vy}"),
+            Subtract(vx, vy) => write!(f, "SUB {vx}, {vy}"),
+            SubtractN(vx, vy) => write!(f, "SUBN {vx}, {vy}"),
+            SkipIfNotEqual(vx, vy) => write!(f, "SNE {vx}, {vy}"),
+            LoadI(addr) => write!(f, "LD I, {addr}"),
+            JumpOffset(addr) => write!(f, "JP V0, {addr}"),
+            AndRandom(vx, b) => write!(f, "RND {vx}, {b}"),
+            Draw(vx, vy, b) => write!(f, "DRW {vx}, {vy}, {b}"),
+            LoadDT(vx) => write!(f, "LD {vx}, DT"),
+            StoreDT(vx) => write!(f, "LD DT, {vx}"),
+            AddI(vx) => write!(f, "ADD I, {vx}"),
+            LoadSprite(vx) => write!(f, "LD I, {vx}"),
+            StoreBCD(vx) => write!(f, "LD I, {vx}"),
+            Store(vx) => write!(f, "LD [I], {vx}"),
+            Load(vx) => write!(f, "LD {vx}, [I]"),
+            Nop => write!(f, "NOP")
+        }
+    }
 }
 
 // 8xy6 - SHR Vx {, Vy}

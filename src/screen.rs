@@ -27,13 +27,13 @@ impl Screen {
     }
 
     pub fn show(&self) {
-        print!("\x1B[2J\x1B[H{}", self)
+        print!("{}", self)
     }
 }
 
 impl Display for Screen {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), fmt::Error> {
-        writeln!(f, "┌{}┐", "─".repeat(NCOLS))?;
+        writeln!(f, "\x1B[2J\x1B[H┌{}┐", "─".repeat(NCOLS))?;
         for row in 0..NROWS {
             write!(f, "│")?;
             for col in 0..NCOLS {

@@ -12,7 +12,6 @@ use rand::random;
 const STACK_SIZE: usize = 0x10;
 const NUM_REGISTERS: usize = 0x10;
 const PC_INCREMENT: Address = Address(2);
-
 const PROGRAM_BASE: usize = 0x200;
 const PC_START: Address = Address(PROGRAM_BASE as u16);
 
@@ -40,7 +39,7 @@ pub struct Cpu {
     v: [u8; NUM_REGISTERS],
     i: Address,
     dt: Arc<AtomicU8>,
-    st: u8,
+    st: Arc<AtomicU8>,
     pc: Address,
     sp: usize,
     stack: [Address; STACK_SIZE],
@@ -55,6 +54,8 @@ impl Display for Cpu {
             let reg: VRegister = reg.try_into().unwrap();
             writeln!(f, "{reg:?} = {}", self.v[reg])?;
         }
+        writeln!(f, "DT = {}", self.dt.load(Ordering::SeqCst))?;
+        writeln!(f, "ST = {}", self.st.load(Ordering::SeqCst))?;
         writeln!(f, "PC = {}", self.pc)?;
         writeln!(f, "I = {}", self.i)?;
         writeln!(f, "SP = {}", self.sp)?;
@@ -102,7 +103,7 @@ impl Cpu {
         f.read_to_end(&mut program)?;
 
         let mut memory = Memory::new();
-        memory.copy_to_offset(&SPRITES, 80, 0);
+        memory.copy_to_offset(&SPRITES, SPRITES.len(), 0);
         memory.copy_to_offset(&program, program.len(), PROGRAM_BASE);
 
         let (tx, rx) = channel();
@@ -120,7 +121,7 @@ impl Cpu {
             v: [0; NUM_REGISTERS],
             i: Address(0),
             dt,
-            st: 0,
+            st: Arc::new(0.into()),
             pc: PC_START,
             sp: 0,
             stack: [Address(0); STACK_SIZE],
@@ -169,7 +170,7 @@ impl Cpu {
             [0xF, x, 0x1, 0x5] => Ok(StoreDT(x.try_into()?)),
             [0xF, _x, 0x1, 0x8] => Ok(Nop),
             [0xF, x, 0x1, 0xE] => Ok(AddI(x.try_into()?)),
-            [0xF, x, 0x2, 0x9] => Ok(LoadSprite(x)),
+            [0xF, x, 0x2, 0x9] => Ok(LoadSprite(x.try_into()?)),
             [0xF, x, 0x3, 0x3] => Ok(StoreBCD(x.try_into()?)),
             [0xF, x, 0x5, 0x5] => Ok(Store(x.try_into()?)),
             [0xF, x, 0x6, 0x5] => Ok(Load(x.try_into()?)),
@@ -193,7 +194,7 @@ impl Cpu {
                 self.pc = addr
             },
             JumpOffset(addr) => {
-                self.pc = addr + self.v[VRegister::V0].into();
+                self.pc = addr.offset(self.v[VRegister::V0] as u16);
             }
             Call(addr) => {
                 if self.sp >= STACK_SIZE {
@@ -270,10 +271,12 @@ impl Cpu {
             StoreDT(reg) => {
                 self.dt.store(self.v[reg], Ordering::SeqCst)
             },
-            LoadSprite(x) => self.i = (x * 5).into(),
+            LoadSprite(reg) => {
+                self.i = ((self.v[reg] & 0xF) * 5).into()
+            },
             Load(reg) => {
                 for r in 0u8..((reg as u8) + 1) {
-                    let addr = self.i + r.into();
+                    let addr = self.i.offset(r as u16);
                     let reg: VRegister = r.try_into()?;
                     self.v[reg] = self.memory
                         .get_byte(addr)
@@ -282,7 +285,7 @@ impl Cpu {
             },
             Store(reg) => {
                 for r in 0u8..((reg as u8) + 1) {
-                    let addr = self.i + r.into();
+                    let addr = self.i.offset(r as u16);
                     let reg: VRegister = r.try_into()?;
                     self.memory
                         .set_byte(addr, self.v[reg])
@@ -295,18 +298,18 @@ impl Cpu {
                     .set_byte(self.i, val / 100)
                     .ok_or_else(|| CpuError::SegmentationFault(self.pc))?; 
                 self.memory
-                    .set_byte(self.i + Address(1), (val / 10) % 10)
+                    .set_byte(self.i.offset(1), (val / 10) % 10)
                     .ok_or_else(|| CpuError::SegmentationFault(self.pc))?; 
                 self.memory
-                    .set_byte(self.i + Address(2), val % 10)
+                    .set_byte(self.i.offset(2), val % 10)
                     .ok_or_else(|| CpuError::SegmentationFault(self.pc))?;
             },
             Draw(regx, regy, n) => {
                 let x = self.v[regx] & (screen::NCOLS as u8 - 1);
                 let mut y = self.v[regy] & (screen::NROWS as u8 - 1);
 
-                for offset in 0..n {
-                    let addr = self.i + offset.into();
+                for offset in 0..(n.into()) {
+                    let addr = self.i.offset(offset);
                     let data = match self.memory.get_byte(addr) {
                         Some(data) => data,
                         None => return Err(CpuError::SegmentationFault(addr))

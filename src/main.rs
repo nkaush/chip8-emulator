@@ -1,14 +1,16 @@
+use std::{env, sync::mpsc, error::Error};
+use chrono::Duration;
 use chip8::cpu::Cpu;
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let args = std::env::args().collect::<Vec<_>>();
+fn main() -> Result<(), Box<dyn Error>> {
+    let args = env::args().collect::<Vec<_>>();
     let mut cpu = Cpu::new(args[1].clone().into())?;
 
-    let (tx, rx) = std::sync::mpsc::channel();
+    let (tx, rx) = mpsc::channel();
     let timer = timer::MessageTimer::new(tx);
 
     // Start repeating.
-    let _guard = timer.schedule_repeating(chrono::Duration::microseconds(1000), ());
+    let _guard = timer.schedule_repeating(Duration::microseconds(1000), ());
 
     loop {
         let fetched = cpu.fetch()
@@ -24,7 +26,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 format!("{e:?}")
             })?;
 
-        eprintln!("{fetched:04x} => {decoded:?}");
+        eprintln!("{fetched:04x} => {decoded}");
         cpu.execute(decoded)
             .map_err(|e| {
                 eprintln!("{}", cpu);
