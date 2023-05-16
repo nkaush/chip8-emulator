@@ -1,4 +1,4 @@
-use std::{sync::mpsc::Sender, thread::{self, JoinHandle}};
+use std::{sync::mpsc::channel, thread::{self, JoinHandle}};
 use timer::{MessageTimer, Guard};
 
 pub struct Ticker {
@@ -8,10 +8,13 @@ pub struct Ticker {
 }
 
 impl Ticker {
-    pub fn new<F>(tx: Sender<()>, f: F) -> Self where F: 'static + Fn() -> () + Send {
+    pub fn new<F>(f: F) -> Self where F: 'static + Send + Fn() {
+        let (tx, rx) = channel();
         let _mtimer = timer::MessageTimer::new(tx);
         let _ticker = _mtimer.schedule_repeating(chrono::Duration::microseconds(16667), ());
-        let _handle = thread::spawn(f);
+        let _handle = thread::spawn(move || {
+            rx.iter().for_each(|_| f())
+        });
 
         Self {
             _mtimer,

@@ -4,7 +4,7 @@ use crate::{
     screen::{self, Screen}, ticker::Ticker, 
 };
 use std::{
-    sync::{Arc, atomic::{AtomicU8, Ordering}, mpsc::channel}, fs::File, 
+    sync::{Arc, atomic::{AtomicU8, Ordering}}, fs::File, 
     path::PathBuf, io::{self, Read}, fmt::{Display, Formatter}
 };
 use rand::random;
@@ -106,14 +106,11 @@ impl Cpu {
         memory.copy_to_offset(&SPRITES, SPRITES.len(), 0);
         memory.copy_to_offset(&program, program.len(), PROGRAM_BASE);
 
-        let (tx, rx) = channel();
         let dt: Arc<AtomicU8> = Arc::new(0.into());
         let dtc: Arc<AtomicU8> = dt.clone();
-        let ticker: Ticker = Ticker::new(tx, move || {
-            while let Ok(_) = rx.recv() {
-                if dtc.load(Ordering::SeqCst) > 0 {
-                    dtc.fetch_sub(1, Ordering::SeqCst);
-                }
+        let ticker: Ticker = Ticker::new(move || {
+            if dtc.load(Ordering::SeqCst) > 0 {
+                dtc.fetch_sub(1, Ordering::SeqCst);
             }
         });
         
@@ -142,38 +139,46 @@ impl Cpu {
 
     pub fn decode(&self, instruction: u16) -> Result<Instruction, CpuError> {
         use Instruction::*;
-        match split_into_nibbles(instruction) {
+
+        let nibbles = split_into_nibbles(instruction);
+        let vx = nibbles[1].try_into();
+        let vy = nibbles[2].try_into();
+        let addr = (instruction & 0xFFF).into();
+        let lsb = (instruction & 0xFF) as u8;
+        let lsn = (instruction & 0xF) as u8;
+
+        match nibbles {
             [0x0, 0x0, 0xE, 0x0] => Ok(ClearScreen),
             [0x0, 0x0, 0xE, 0xE] => Ok(Return),
-            [0x1, n0, n1, n2] => Ok(Jump([n0, n1, n2].try_into()?)),
-            [0x2, n0, n1, n2] => Ok(Call([n0, n1, n2].try_into()?)),
-            [0x3, x, k1, k2] => Ok(SkipIfEqualImm(x.try_into()?, (k1 << 4) | k2)),
-            [0x4, x, k1, k2] => Ok(SkipIfNotEqualImm(x.try_into()?, (k1 << 4) | k2)),
-            [0x5, x, y, 0x0] => Ok(SkipIfEqual(x.try_into()?, y.try_into()?)),
-            [0x6, x, k1, k2] => Ok(LoadImm(x.try_into()?, (k1 << 4) | k2)),
-            [0x7, x, k1, k2] => Ok(AddImm(x.try_into()?, (k1 << 4) | k2)),
-            [0x8, x, y, 0x0] => Ok(Move(x.try_into()?, y.try_into()?)),
-            [0x8, x, y, 0x1] => Ok(Or(x.try_into()?, y.try_into()?)),
-            [0x8, x, y, 0x2] => Ok(And(x.try_into()?, y.try_into()?)),
-            [0x8, x, y, 0x3] => Ok(Xor(x.try_into()?, y.try_into()?)),
-            [0x8, x, y, 0x4] => Ok(Add(x.try_into()?, y.try_into()?)),
-            [0x8, x, y, 0x5] => Ok(Subtract(x.try_into()?, y.try_into()?)),
-            // [0x8, x, y, 0x6] => todo!(),
-            [0x8, x, y, 0x7] => Ok(SubtractN(x.try_into()?, y.try_into()?)),
-            // [0x8, x, y, 0x8] => todo!(),
-            [0x9, x, y, 0] => Ok(SkipIfNotEqual(x.try_into()?, y.try_into()?)),
-            [0xA, n0, n1, n2] => Ok(LoadI([n0, n1, n2].try_into()?)),
-            [0xB, n0, n1, n2] => Ok(JumpOffset([n0, n1, n2].try_into()?)),
-            [0xC, x, k1, k2] => Ok(AndRandom(x.try_into()?, (k1 << 4) | k2)),
-            [0xD, x, y, n] => Ok(Draw(x.try_into()?, y.try_into()?, n)),
-            [0xF, x, 0x0, 0x7] => Ok(LoadDT(x.try_into()?)),
-            [0xF, x, 0x1, 0x5] => Ok(StoreDT(x.try_into()?)),
-            [0xF, _x, 0x1, 0x8] => Ok(Nop),
-            [0xF, x, 0x1, 0xE] => Ok(AddI(x.try_into()?)),
-            [0xF, x, 0x2, 0x9] => Ok(LoadSprite(x.try_into()?)),
-            [0xF, x, 0x3, 0x3] => Ok(StoreBCD(x.try_into()?)),
-            [0xF, x, 0x5, 0x5] => Ok(Store(x.try_into()?)),
-            [0xF, x, 0x6, 0x5] => Ok(Load(x.try_into()?)),
+            [0x1, ..]            => Ok(Jump(addr)),
+            [0x2, ..]            => Ok(Call(addr)),
+            [0x3, ..]            => Ok(SkipIfEqualImm(vx?, lsb)),
+            [0x4, ..]            => Ok(SkipIfNotEqualImm(vx?, lsb)),
+            [0x5, .., 0x0]       => Ok(SkipIfEqual(vx?, vy?)),
+            [0x6, ..]            => Ok(LoadImm(vx?, lsb)),
+            [0x7, ..]            => Ok(AddImm(vx?, lsb)),
+            [0x8, .., 0x0]       => Ok(Move(vx?, vy?)),
+            [0x8, .., 0x1]       => Ok(Or(vx?, vy?)),
+            [0x8, .., 0x2]       => Ok(And(vx?, vy?)),
+            [0x8, .., 0x3]       => Ok(Xor(vx?, vy?)),
+            [0x8, .., 0x4]       => Ok(Add(vx?, vy?)),
+            [0x8, .., 0x5]       => Ok(Subtract(vx?, vy?)),
+            // [0x8, .., 0x6] => todo!(),
+            [0x8, .., 0x7]       => Ok(SubtractN(vx?, vy?)),
+            // [0x8, .., 0x8] => todo!(),
+            [0x9, .., 0x0]       => Ok(SkipIfNotEqual(vx?, vy?)),
+            [0xA, ..]            => Ok(LoadI(addr)),
+            [0xB, ..]            => Ok(JumpOffset(addr)),
+            [0xC, ..]            => Ok(AndRandom(vx?, lsb)),
+            [0xD, ..]            => Ok(Draw(vx?, vy?, lsn)),
+            [0xF, _, 0x0, 0x7]   => Ok(LoadDT(vx?)),
+            [0xF, _, 0x1, 0x5]   => Ok(StoreDT(vx?)),
+            [0xF, _, 0x1, 0x8]   => Ok(Nop),
+            [0xF, _, 0x1, 0xE]   => Ok(AddI(vx?)),
+            [0xF, _, 0x2, 0x9]   => Ok(LoadSprite(vx?)),
+            [0xF, _, 0x3, 0x3]   => Ok(StoreBCD(vx?)),
+            [0xF, _, 0x5, 0x5]   => Ok(Store(vx?)),
+            [0xF, _, 0x6, 0x5]   => Ok(Load(vx?)),
             _ => Err(CpuError::InvalidInstruction(instruction))
         }
     }
