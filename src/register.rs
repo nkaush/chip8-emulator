@@ -16,9 +16,11 @@ pub enum VRegister {
     VB = 0xb,
     VC = 0xc,
     VD = 0xd,
-    VE = 0xe
+    VE = 0xe,
+    VF = 0xf
 }
 
+#[derive(Debug)]
 pub struct InvalidRegisterNumber(pub String);
 
 impl TryFrom<u8> for VRegister {
@@ -43,6 +45,7 @@ impl TryFrom<u8> for VRegister {
             0xc => Ok(VC),
             0xd => Ok(VD),
             0xe => Ok(VE),
+            0xf => Ok(VF),
             _ => Err(InvalidRegisterNumber(format!("Invalid Register ID: {value}")))
         }
     }

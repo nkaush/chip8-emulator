@@ -1,11 +1,16 @@
 use crate::{
-    isa::Instruction, register::{InvalidRegisterNumber, VRegister}, memory::Memory,
-    address::{Address, InvalidAddress}, screen::{self, Screen}, 
+    isa::Instruction, register::{InvalidRegisterNumber, VRegister}, 
+    memory::Memory, address::{Address, InvalidAddress}, 
+    screen::{self, Screen}, ticker::Ticker, 
 };
-use std::{fs::File, path::PathBuf, io::{self, Read}};
+use std::{
+    sync::{Arc, atomic::{AtomicU8, Ordering}, mpsc::channel}, fs::File, 
+    path::PathBuf, io::{self, Read}, fmt::{Display, Formatter}
+};
+use rand::random;
 
 const STACK_SIZE: usize = 0x10;
-const NUM_REGISTERS: usize = 0xF;
+const NUM_REGISTERS: usize = 0x10;
 const PC_INCREMENT: Address = Address(2);
 
 const PROGRAM_BASE: usize = 0x200;
@@ -30,19 +35,33 @@ const SPRITES: [u8; 80] = [
     0xF0, 0x80, 0xF0, 0x80, 0x80
 ];
 
-
 #[allow(dead_code)]
 pub struct Cpu {
     v: [u8; NUM_REGISTERS],
-    vf: bool,
     i: Address,
-    dt: u8,
+    dt: Arc<AtomicU8>,
     st: u8,
     pc: Address,
     sp: usize,
     stack: [Address; STACK_SIZE],
     pub memory: Memory,
-    display: Screen
+    display: Screen,
+    ticker: Ticker
+}
+
+impl Display for Cpu {
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), std::fmt::Error> {
+        for reg in 0..16 {
+            let reg: VRegister = reg.try_into().unwrap();
+            writeln!(f, "{reg:?} = {}", self.v[reg])?;
+        }
+        writeln!(f, "PC = {}", self.pc)?;
+        writeln!(f, "I = {}", self.i)?;
+        writeln!(f, "SP = {}", self.sp)?;
+        writeln!(f, "STACK: {:?}", self.stack)?;
+
+        Ok(())
+    }
 }
 
 #[derive(Debug)]
@@ -51,7 +70,8 @@ pub enum CpuError {
     InfiniteLoop,
     InvalidAddress(String),
     InvalidRegister(String),
-    SegmentationFault(Address)
+    SegmentationFault(Address),
+    InvalidInstruction(u16)
 }
 
 impl From<InvalidAddress> for CpuError {
@@ -67,7 +87,12 @@ impl From<InvalidRegisterNumber> for CpuError {
 }
 
 fn split_into_nibbles(i: u16) -> [u8; 4] {
-    [((i & 0xF000) >> 12) as u8, ((i & 0xF00) >> 8) as u8, ((i & 0xF0) >> 4) as u8, (i & 0xF) as u8]
+    [
+        ((i & 0xF000) >> 12) as u8, 
+        ((i & 0xF00) >> 8) as u8, 
+        ((i & 0xF0) >> 4) as u8, 
+        (i & 0xF) as u8
+    ]
 }
 
 impl Cpu {
@@ -80,23 +105,34 @@ impl Cpu {
         memory.copy_to_offset(&SPRITES, 80, 0);
         memory.copy_to_offset(&program, program.len(), PROGRAM_BASE);
 
+        let (tx, rx) = channel();
+        let dt: Arc<AtomicU8> = Arc::new(0.into());
+        let dtc: Arc<AtomicU8> = dt.clone();
+        let ticker: Ticker = Ticker::new(tx, move || {
+            while let Ok(_) = rx.recv() {
+                if dtc.load(Ordering::SeqCst) > 0 {
+                    dtc.fetch_sub(1, Ordering::SeqCst);
+                }
+            }
+        });
+        
         Ok(Self {
             v: [0; NUM_REGISTERS],
-            vf: false,
             i: Address(0),
-            dt: 0,
+            dt,
             st: 0,
             pc: PC_START,
             sp: 0,
             stack: [Address(0); STACK_SIZE],
             memory,
-            display: Screen::new()
+            display: Screen::new(),
+            ticker
         })
     }
 
     pub fn fetch(&mut self) -> Result<u16, CpuError> {
         let instruction = self.memory
-            .get_short(self.pc.0 as usize)
+            .get_short(self.pc)
             .ok_or_else(|| CpuError::SegmentationFault(self.pc));
 
         self.pc += PC_INCREMENT;
@@ -112,7 +148,7 @@ impl Cpu {
             [0x2, n0, n1, n2] => Ok(Call([n0, n1, n2].try_into()?)),
             [0x3, x, k1, k2] => Ok(SkipIfEqualImm(x.try_into()?, (k1 << 4) | k2)),
             [0x4, x, k1, k2] => Ok(SkipIfNotEqualImm(x.try_into()?, (k1 << 4) | k2)),
-            [0x5, x, y, 0] => Ok(SkipIfEqual(x.try_into()?, y.try_into()?)),
+            [0x5, x, y, 0x0] => Ok(SkipIfEqual(x.try_into()?, y.try_into()?)),
             [0x6, x, k1, k2] => Ok(LoadImm(x.try_into()?, (k1 << 4) | k2)),
             [0x7, x, k1, k2] => Ok(AddImm(x.try_into()?, (k1 << 4) | k2)),
             [0x8, x, y, 0x0] => Ok(Move(x.try_into()?, y.try_into()?)),
@@ -125,19 +161,30 @@ impl Cpu {
             [0x8, x, y, 0x7] => Ok(SubtractN(x.try_into()?, y.try_into()?)),
             // [0x8, x, y, 0x8] => todo!(),
             [0x9, x, y, 0] => Ok(SkipIfNotEqual(x.try_into()?, y.try_into()?)),
-            [0xa, n0, n1, n2] => Ok(LoadI([n0, n1, n2].try_into()?)),
-            [0xd, x, y, n] => Ok(Draw(x.try_into()?, y.try_into()?, n)),
-            _ => unimplemented!()
+            [0xA, n0, n1, n2] => Ok(LoadI([n0, n1, n2].try_into()?)),
+            [0xB, n0, n1, n2] => Ok(JumpOffset([n0, n1, n2].try_into()?)),
+            [0xC, x, k1, k2] => Ok(AndRandom(x.try_into()?, (k1 << 4) | k2)),
+            [0xD, x, y, n] => Ok(Draw(x.try_into()?, y.try_into()?, n)),
+            [0xF, x, 0x0, 0x7] => Ok(LoadDT(x.try_into()?)),
+            [0xF, x, 0x1, 0x5] => Ok(StoreDT(x.try_into()?)),
+            [0xF, _x, 0x1, 0x8] => Ok(Nop),
+            [0xF, x, 0x1, 0xE] => Ok(AddI(x.try_into()?)),
+            [0xF, x, 0x2, 0x9] => Ok(LoadSprite(x)),
+            [0xF, x, 0x3, 0x3] => Ok(StoreBCD(x.try_into()?)),
+            [0xF, x, 0x5, 0x5] => Ok(Store(x.try_into()?)),
+            [0xF, x, 0x6, 0x5] => Ok(Load(x.try_into()?)),
+            _ => Err(CpuError::InvalidInstruction(instruction))
         }
     }
 
     pub fn execute(&mut self, instruction: Instruction) -> Result<(), CpuError> {
         use Instruction::*;
         match instruction {
+            Nop => (),
             ClearScreen => self.display.clear(),
             Return => {
-                self.pc = self.stack[self.sp];
                 self.sp -= 1;
+                self.pc = self.stack[self.sp];
             }
             Jump(addr) => {
                 if self.pc - PC_INCREMENT == addr {
@@ -177,45 +224,101 @@ impl Cpu {
                     self.pc += PC_INCREMENT;
                 }
             },
-            LoadImm(reg, imm) => self.v[reg as usize] = imm,
-            AddImm(reg, imm) => self.v[reg] = self.v[reg].wrapping_add(imm),
-            Move(regx, regy) => self.v[regx] = self.v[regy],
-            Or(regx, regy) => self.v[regx] |= self.v[regy],
-            And(regx, regy) => self.v[regx] &= self.v[regy],
-            Xor(regx, regy) => self.v[regx] ^= self.v[regy],
+            LoadImm(reg, imm) => {
+                self.v[reg as usize] = imm
+            },
+            AddImm(reg, imm) => {
+                self.v[reg] = self.v[reg].wrapping_add(imm)
+            },
+            Move(regx, regy) => {
+                self.v[regx] = self.v[regy]
+            },
+            Or(regx, regy) => {
+                self.v[regx] |= self.v[regy]
+            },
+            And(regx, regy) => {
+                self.v[regx] &= self.v[regy]
+            },
+            Xor(regx, regy) => {
+                self.v[regx] ^= self.v[regy]
+            },
+            AndRandom(reg, byte) => {
+                self.v[reg] = byte & random::<u8>()
+            },
+            AddI(reg) => {
+                self.i += self.v[reg].into()
+            },
             Add(regx, regy) => {
-                // let mut overflow = false;
-                // (self.v[regx], *(&mut overflow)) = self.v[regx].overflowing_add(self.v[regy]);
-                // self.v[0xF] = ...
-                (self.v[regx], self.vf) = self.v[regx].overflowing_add(self.v[regy]);
+                let vf = &mut false;
+                (self.v[regx], *vf) = self.v[regx].overflowing_add(self.v[regy]);
+                self.v[VRegister::VF] = *vf as u8;
             },
             Subtract(regx, regy) => {
                 let (diff, overflow) = self.v[regx].overflowing_sub(self.v[regy]);
+                self.v[VRegister::VF] = (!overflow) as u8;
                 self.v[regx] = diff;
-                self.vf = !overflow;
             },
             SubtractN(regx, regy) => {
                 let (diff, overflow) = self.v[regy].overflowing_sub(self.v[regx]);
+                self.v[VRegister::VF] = (!overflow) as u8;
                 self.v[regx] = diff;
-                self.vf = !overflow;
             },
             LoadI(addr) => self.i = addr,
+            LoadDT(reg) => {
+                self.v[reg] = self.dt.load(Ordering::SeqCst);
+            },
+            StoreDT(reg) => {
+                self.dt.store(self.v[reg], Ordering::SeqCst)
+            },
+            LoadSprite(x) => self.i = (x * 5).into(),
+            Load(reg) => {
+                for r in 0u8..((reg as u8) + 1) {
+                    let addr = self.i + r.into();
+                    let reg: VRegister = r.try_into()?;
+                    self.v[reg] = self.memory
+                        .get_byte(addr)
+                        .ok_or_else(|| CpuError::SegmentationFault(self.pc))?;
+                }
+            },
+            Store(reg) => {
+                for r in 0u8..((reg as u8) + 1) {
+                    let addr = self.i + r.into();
+                    let reg: VRegister = r.try_into()?;
+                    self.memory
+                        .set_byte(addr, self.v[reg])
+                        .ok_or_else(|| CpuError::SegmentationFault(self.pc))?; 
+                }
+            },
+            StoreBCD(reg) => {
+                let val = self.v[reg];
+                self.memory
+                    .set_byte(self.i, val / 100)
+                    .ok_or_else(|| CpuError::SegmentationFault(self.pc))?; 
+                self.memory
+                    .set_byte(self.i + Address(1), (val / 10) % 10)
+                    .ok_or_else(|| CpuError::SegmentationFault(self.pc))?; 
+                self.memory
+                    .set_byte(self.i + Address(2), val % 10)
+                    .ok_or_else(|| CpuError::SegmentationFault(self.pc))?;
+            },
             Draw(regx, regy, n) => {
                 let x = self.v[regx] & (screen::NCOLS as u8 - 1);
                 let mut y = self.v[regy] & (screen::NROWS as u8 - 1);
 
                 for offset in 0..n {
-                    let addr = self.i.offset(offset.into());
-                    let data = match self.memory.get_byte(addr as usize) {
+                    let addr = self.i + offset.into();
+                    let data = match self.memory.get_byte(addr) {
                         Some(data) => data,
-                        None => return Err(CpuError::SegmentationFault(Address(addr)))
+                        None => return Err(CpuError::SegmentationFault(addr))
                     };
                     let mut xx = x;
 
                     for i in (0u8..8).rev() {
                         if (1 << i) & data > 0 {
                             match self.display.flip(xx as usize, y as usize) {
-                                Some(res) => self.vf |= res,
+                                Some(res) => {
+                                    self.v[VRegister::VF] = res as u8
+                                },
                                 None => break
                             };
                         }
@@ -227,7 +330,6 @@ impl Cpu {
 
                 self.display.show();
             }
-            // _ => ()
         }
 
         Ok(())

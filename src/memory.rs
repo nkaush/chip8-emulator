@@ -1,4 +1,5 @@
 use std::fmt::{Display, Formatter};
+use crate::address::Address;
 
 const MEMORY_SIZE: usize = 0x1000;
 
@@ -17,13 +18,25 @@ impl Memory {
         }
     }
 
-    pub fn get_byte(&self, address: usize) -> Option<u8> {
-        self.mem.get(address).copied()
+    pub fn set_byte(&mut self, address: Address, byte: u8) -> Option<u8> {
+        let loc = self.mem.get_mut(address.0 as usize);
+        if let Some(val) = loc {
+            let out = *val;
+            *val = byte;
+            Some(out)
+        } else {
+            None
+        }
     }
 
-    pub fn get_short(&self, address: usize) -> Option<u16> {
-        match (self.mem.get(address), self.mem.get(address + 1)) {
-            (Some(msb), Some(lsb)) => Some(((*msb as u16) << 8) | (*lsb as u16)),
+    pub fn get_byte(&self, address: Address) -> Option<u8> {
+        self.mem.get(address.0 as usize).copied()
+    }
+
+    pub fn get_short(&self, address: Address) -> Option<u16> {
+        let incr = address + Address(1);
+        match (self.get_byte(address), self.get_byte(incr)) {
+            (Some(msb), Some(lsb)) => Some(((msb as u16) << 8) | (lsb as u16)),
             _ => None
         }
     }

@@ -4,11 +4,11 @@ use std::fmt::{Display, Formatter, Debug};
 #[derive(Copy, Clone, PartialEq, Eq)]
 pub struct Address(pub u16);
 
-impl Address {
-    pub fn offset(&self, off: u16) -> u16 {
-        self.0 + off
-    }
-}
+// impl Address {
+//     pub fn offset(&self, off: u16) -> u16 {
+//         self.0 + off
+//     }
+// }
 
 pub struct InvalidAddress(pub String);
 

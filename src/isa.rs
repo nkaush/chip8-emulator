@@ -61,16 +61,10 @@ pub enum Instruction {
     /// If `Vx` > `Vy`, then `VF` is set to 1, otherwise 0. Then `Vy` is 
     /// subtracted from `Vx`, and the results stored in `Vx`.
     Subtract(VRegister, VRegister),
-
-    /// TODO: SHR
-
     /// `8xy7` - `SUBN Vx, Vy`: Set `Vx` = `Vy` - `Vx`, set `VF` = `NOT borrow`.
     /// If `Vy` > `Vx`, then `VF` is set to 1, otherwise 0. Then `Vx` is 
     /// subtracted from `Vy`, and the results stored in `Vx`.
     SubtractN(VRegister, VRegister),
-
-    /// TODO: SHL
-
     /// `9xy0` - `SNE Vx, Vy`: Skip next instruction if `Vx` != `Vy`. The values 
     /// of `Vx` and `Vy` are compared, and if they are not equal, the program 
     /// counter is increased by 2.
@@ -81,7 +75,11 @@ pub enum Instruction {
     /// `Bnnn` - `JP V0, addr`: Jump to location `nnn` + `V0`. The program 
     /// counter is set to `nnn` plus the value of `V0`.
     JumpOffset(Address),
-
+    /// `Cxkk` - `RND Vx, byte`: Set `Vx` = `random byte` AND `kk`. The 
+    /// interpreter generates a random number from 0 to 255, which is then 
+    /// ANDed with the value `kk`. The results are stored in `Vx`. See 
+    /// instruction 8xy2 for more information on AND.
+    AndRandom(VRegister, u8),
     /// `Dxyn` - `DRW Vx, Vy, nibble`: Display `n`-byte sprite starting at 
     /// memory location `I` at (`Vx`, `Vy`), set `VF` = `collision`. The 
     /// interpreter reads `n` bytes from memory, starting at the address stored 
@@ -93,90 +91,59 @@ pub enum Instruction {
     /// screen. See instruction 8xy3 for more information on XOR, and section 
     /// 2.4, Display, for more information on the Chip-8 screen and sprites.
     Draw(VRegister, VRegister, u8),
+    /// `Fx07` - `LD Vx, DT`: Set `Vx` = delay timer value. The value of `DT` is 
+    /// placed into `Vx`.
+    LoadDT(VRegister),
+    /// `Fx15` - `LD DT, Vx`: Set delay timer = `Vx`. `DT` is set equal to the 
+    /// value of `Vx`.
+    StoreDT(VRegister),
+    /// `Fx1E` - `ADD I, Vx`: Set `I` = `I` + `Vx`. The values of `I` and `Vx` 
+    /// are added, and the results are stored in `I`.
+    AddI(VRegister),
+    /// `Fx29` - `LD F, Vx`: Set `I` = location of sprite for digit `Vx`. The 
+    /// value of I is set to the location for the hexadecimal sprite 
+    /// corresponding to the value of `Vx`. See section 2.4, Display, for more 
+    /// information on the Chip-8 hexadecimal font.
+    LoadSprite(u8),
+    /// `Fx33` - `LD B, Vx`: Store BCD representation of `Vx` in memory 
+    /// locations `I`, `I+1`, and `I+2`. The interpreter takes the decimal value 
+    /// of `Vx`, and places the hundreds digit in memory at location in `I`, the 
+    /// tens digit at location `I+1`, and the ones digit at location `I+2`.
+    StoreBCD(VRegister),
+    /// `Fx55` - `LD [I], Vx`: Store registers `V0` through `Vx` in memory 
+    /// starting at location `I`. The interpreter copies the values of registers 
+    /// `V0` through `Vx` into memory, starting at the address in `I`.
+    Store(VRegister),
+    /// `Fx65` - `LD Vx, [I]`: Read registers `V0` through `Vx` from memory 
+    /// starting at location `I`. The interpreter reads values from memory 
+    /// starting at location `I` into registers `V0` through `Vx`.
+    Load(VRegister),
+    /// This instruction is not part of the official CHIP-8 ISA, but I have 
+    /// added it regardless as a placeholder for instructions that are not yet 
+    /// implemented by this interpreter. 
+    Nop
 }
 
 // 8xy6 - SHR Vx {, Vy}
 // Set Vx = Vx SHR 1.
 // If the least-significant bit of Vx is 1, then VF is set to 1, otherwise 0. Then Vx is divided by 2.
 
-
 // 8xyE - SHL Vx {, Vy}
 // Set Vx = Vx SHL 1.
 // If the most-significant bit of Vx is 1, then VF is set to 1, otherwise to 0. Then Vx is multiplied by 2.
 
-
-
-
-
-// Cxkk - RND Vx, byte
-// Set Vx = random byte AND kk.
-
-// The interpreter generates a random number from 0 to 255, which is then ANDed with the value kk. The results are stored in Vx. See instruction 8xy2 for more information on AND.
-
-
-
-
 // Ex9E - SKP Vx
 // Skip next instruction if key with the value of Vx is pressed.
-
 // Checks the keyboard, and if the key corresponding to the value of Vx is currently in the down position, PC is increased by 2.
-
 
 // ExA1 - SKNP Vx
 // Skip next instruction if key with the value of Vx is not pressed.
-
 // Checks the keyboard, and if the key corresponding to the value of Vx is currently in the up position, PC is increased by 2.
-
-
-// Fx07 - LD Vx, DT
-// Set Vx = delay timer value.
-
-// The value of DT is placed into Vx.
-
 
 // Fx0A - LD Vx, K
 // Wait for a key press, store the value of the key in Vx.
-
 // All execution stops until a key is pressed, then the value of that key is stored in Vx.
-
-
-// Fx15 - LD DT, Vx
-// Set delay timer = Vx.
-
-// DT is set equal to the value of Vx.
-
 
 // Fx18 - LD ST, Vx
 // Set sound timer = Vx.
-
 // ST is set equal to the value of Vx.
-
-
-// Fx1E - ADD I, Vx
-// Set I = I + Vx.
-
-// The values of I and Vx are added, and the results are stored in I.
-
-
-// Fx29 - LD F, Vx
-// Set I = location of sprite for digit Vx.
-
-// The value of I is set to the location for the hexadecimal sprite corresponding to the value of Vx. See section 2.4, Display, for more information on the Chip-8 hexadecimal font.
-
-
-// Fx33 - LD B, Vx
-// Store BCD representation of Vx in memory locations I, I+1, and I+2.
-
-// The interpreter takes the decimal value of Vx, and places the hundreds digit in memory at location in I, the tens digit at location I+1, and the ones digit at location I+2.
-
-
-// Fx55 - LD [I], Vx
-// Store registers V0 through Vx in memory starting at location I.
-
-// The interpreter copies the values of registers V0 through Vx into memory, starting at the address in I.
-
-
-// Fx65 - LD Vx, [I]
-// Read registers V0 through Vx from memory starting at location I.
-
-// The interpreter reads values from memory starting at location I into registers V0 through Vx.
