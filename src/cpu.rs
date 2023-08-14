@@ -1,19 +1,18 @@
 use crate::{
-    isa::Instruction, register::{InvalidRegisterNumber, VRegister}, 
-    memory::Memory, address::{Address, InvalidAddress}, 
-    screen::{self, Screen}, ticker::Ticker, 
+    memory::{Memory, SegmentationFault}, address::{Address, InvalidAddress},
+    register::{InvalidRegisterNumber, VRegister}, screen::{self, Screen},
+    ticker::Ticker, isa::Instruction, 
 };
 use std::{
     sync::{Arc, atomic::{AtomicU8, Ordering}}, fs::File, 
-    path::PathBuf, io::{self, Read}, fmt::{Display, Formatter}
+    path::PathBuf, io::{self, Read, Write}, fmt::{Display, Formatter}
 };
 use rand::random;
 
-const STACK_SIZE: usize = 0x10;
-const NUM_REGISTERS: usize = 0x10;
 const PC_INCREMENT: Address = Address(2);
-const PROGRAM_BASE: usize = 0x200;
-const PC_START: Address = Address(PROGRAM_BASE as u16);
+const PC_START: Address = Address(0x200);
+const NUM_REGISTERS: usize = 0x10;
+const STACK_SIZE: usize = 0x10;
 
 const SPRITES: [u8; 80] = [
     0xF0, 0x90, 0x90, 0x90, 0xF0,
@@ -57,9 +56,9 @@ impl Display for Cpu {
         writeln!(f, "DT = {}", self.dt.load(Ordering::SeqCst))?;
         writeln!(f, "ST = {}", self.st.load(Ordering::SeqCst))?;
         writeln!(f, "PC = {}", self.pc)?;
-        writeln!(f, "I = {}", self.i)?;
+        writeln!(f, "I  = {}", self.i)?;
         writeln!(f, "SP = {}", self.sp)?;
-        writeln!(f, "STACK: {:?}", self.stack)?;
+        writeln!(f, "STACK = {:?}", self.stack)?;
 
         Ok(())
     }
@@ -72,7 +71,8 @@ pub enum CpuError {
     InvalidAddress(String),
     InvalidRegister(String),
     SegmentationFault(Address),
-    InvalidInstruction(u16)
+    InvalidInstruction(u16),
+    ProgramLoadError(io::Error)
 }
 
 impl From<InvalidAddress> for CpuError {
@@ -87,24 +87,36 @@ impl From<InvalidRegisterNumber> for CpuError {
     }
 }
 
+impl From<SegmentationFault> for CpuError {
+    fn from(e: SegmentationFault) -> Self {
+        Self::SegmentationFault(e.0)
+    }
+}
+
+impl From<io::Error> for CpuError {
+    fn from(e: io::Error) -> Self {
+        Self::ProgramLoadError(e)
+    }
+}
+
 fn split_into_nibbles(i: u16) -> [u8; 4] {
     [
         ((i & 0xF000) >> 12) as u8, 
-        ((i & 0xF00) >> 8) as u8, 
-        ((i & 0xF0) >> 4) as u8, 
-        (i & 0xF) as u8
+        ((i & 0x0F00) >> 8)  as u8, 
+        ((i & 0x00F0) >> 4)  as u8, 
+         (i & 0x000F)        as u8
     ]
 }
 
 impl Cpu {
-    pub fn new(path: PathBuf) -> Result<Self, io::Error> {
+    pub fn new(path: PathBuf) -> Result<Self, CpuError> {
         let mut program = Vec::new();
         let mut f = File::open(path)?;
         f.read_to_end(&mut program)?;
 
         let mut memory = Memory::new();
-        memory.copy_to_offset(&SPRITES, SPRITES.len(), 0);
-        memory.copy_to_offset(&program, program.len(), PROGRAM_BASE);
+        memory.copy_to_offset(&SPRITES, SPRITES.len(), Address(0))?;
+        memory.copy_to_offset(&program, program.len(), PC_START)?;
 
         let dt: Arc<AtomicU8> = Arc::new(0.into());
         let dtc: Arc<AtomicU8> = dt.clone();
@@ -128,22 +140,32 @@ impl Cpu {
         })
     }
 
+    pub fn dump_core(&self) {
+        let mut f = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open("core")
+            .unwrap();
+
+        f.write(format!("{}", self.memory).as_bytes()).unwrap();
+    }
+
     pub fn fetch(&mut self) -> Result<u16, CpuError> {
         let instruction = self.memory
-            .get_short(self.pc)
-            .ok_or_else(|| CpuError::SegmentationFault(self.pc));
+            .get_short(self.pc)?;
 
         self.pc += PC_INCREMENT;
-        instruction
+        Ok(instruction)
     }
 
     pub fn decode(&self, instruction: u16) -> Result<Instruction, CpuError> {
         use Instruction::*;
 
-        let nibbles = split_into_nibbles(instruction);
+        let nibbles: [u8; 4] = split_into_nibbles(instruction);
         let vx = nibbles[1].try_into();
         let vy = nibbles[2].try_into();
-        let addr = (instruction & 0xFFF).into();
+        let addr: Address = (instruction & Address::MASK).into();
         let lsb = (instruction & 0xFF) as u8;
         let lsn = (instruction & 0xF) as u8;
 
@@ -163,9 +185,9 @@ impl Cpu {
             [0x8, .., 0x3]       => Ok(Xor(vx?, vy?)),
             [0x8, .., 0x4]       => Ok(Add(vx?, vy?)),
             [0x8, .., 0x5]       => Ok(Subtract(vx?, vy?)),
-            // [0x8, .., 0x6] => todo!(),
+            [0x8, .., 0x6]       => Ok(ShiftRight(vx?)),
             [0x8, .., 0x7]       => Ok(SubtractN(vx?, vy?)),
-            // [0x8, .., 0x8] => todo!(),
+            [0x8, .., 0xE]       => Ok(ShiftLeft(vx?)),
             [0x9, .., 0x0]       => Ok(SkipIfNotEqual(vx?, vy?)),
             [0xA, ..]            => Ok(LoadI(addr)),
             [0xB, ..]            => Ok(JumpOffset(addr)),
@@ -269,6 +291,14 @@ impl Cpu {
                 self.v[VRegister::VF] = (!overflow) as u8;
                 self.v[regx] = diff;
             },
+            ShiftRight(regx) => {
+                self.v[VRegister::VF] = self.v[regx] & 0x1;
+                self.v[regx] >>= 1;
+            },
+            ShiftLeft(regx) => {
+                self.v[VRegister::VF] = (self.v[regx] & 0x80) >> 7;
+                self.v[regx] <<= 1;
+            },
             LoadI(addr) => self.i = addr,
             LoadDT(reg) => {
                 self.v[reg] = self.dt.load(Ordering::SeqCst);
@@ -284,8 +314,7 @@ impl Cpu {
                     let addr = self.i.offset(r as u16);
                     let reg: VRegister = r.try_into()?;
                     self.v[reg] = self.memory
-                        .get_byte(addr)
-                        .ok_or_else(|| CpuError::SegmentationFault(self.pc))?;
+                        .get_byte(addr)?;
                 }
             },
             Store(reg) => {
@@ -293,21 +322,14 @@ impl Cpu {
                     let addr = self.i.offset(r as u16);
                     let reg: VRegister = r.try_into()?;
                     self.memory
-                        .set_byte(addr, self.v[reg])
-                        .ok_or_else(|| CpuError::SegmentationFault(self.pc))?; 
+                        .set_byte(addr, self.v[reg])?; 
                 }
             },
             StoreBCD(reg) => {
                 let val = self.v[reg];
-                self.memory
-                    .set_byte(self.i, val / 100)
-                    .ok_or_else(|| CpuError::SegmentationFault(self.pc))?; 
-                self.memory
-                    .set_byte(self.i.offset(1), (val / 10) % 10)
-                    .ok_or_else(|| CpuError::SegmentationFault(self.pc))?; 
-                self.memory
-                    .set_byte(self.i.offset(2), val % 10)
-                    .ok_or_else(|| CpuError::SegmentationFault(self.pc))?;
+                self.memory.set_byte(self.i, val / 100)?; 
+                self.memory.set_byte(self.i.offset(1), (val / 10) % 10)?; 
+                self.memory.set_byte(self.i.offset(2), val % 10)?;
             },
             Draw(regx, regy, n) => {
                 let x = self.v[regx] & (screen::NCOLS as u8 - 1);
@@ -315,10 +337,7 @@ impl Cpu {
 
                 for offset in 0..(n.into()) {
                     let addr = self.i.offset(offset);
-                    let data = match self.memory.get_byte(addr) {
-                        Some(data) => data,
-                        None => return Err(CpuError::SegmentationFault(addr))
-                    };
+                    let data = self.memory.get_byte(addr)?;
                     let mut xx = x;
 
                     for i in (0u8..8).rev() {

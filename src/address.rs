@@ -5,6 +5,8 @@ use std::fmt::{Display, Formatter, Debug};
 pub struct Address(pub u16);
 
 impl Address {
+    pub const MASK: u16 = 0xfff;
+
     pub fn offset(&self, off: u16) -> Address {
         Address(self.0 + off)
     }

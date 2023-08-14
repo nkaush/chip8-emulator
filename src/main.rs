@@ -1,8 +1,8 @@
-use std::{env, sync::mpsc, error::Error};
+use chip8::cpu::{Cpu, CpuError};
+use std::{env, sync::mpsc};
 use chrono::Duration;
-use chip8::cpu::Cpu;
 
-fn main() -> Result<(), Box<dyn Error>> {
+fn main() -> Result<(), CpuError> {
     let args = env::args().collect::<Vec<_>>();
     let mut cpu = Cpu::new(args[1].clone().into())?;
 
@@ -14,24 +14,27 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     loop {
         let fetched = cpu.fetch()
-            .map_err(|e| {
+            .or_else(|e| {
                 eprintln!("{}", cpu);
-                eprintln!("{}", cpu.memory);
-                format!("{e:?}")
+                cpu.dump_core();
+                format!("{e:?}");
+                Err(e)
             })?;
         let decoded = cpu.decode(fetched)
-            .map_err(|e| {
+            .or_else(|e| {
                 eprintln!("{}", cpu);
-                eprintln!("{}", cpu.memory);
-                format!("{e:?}")
+                cpu.dump_core();
+                format!("{e:?}");
+                Err(e)
             })?;
 
-        eprintln!("{fetched:04x} => {decoded}");
+        eprintln!("{fetched:04x} => {decoded:?}");
         cpu.execute(decoded)
-            .map_err(|e| {
+            .or_else(|e| {
                 eprintln!("{}", cpu);
-                eprintln!("{}", cpu.memory);
-                format!("{e:?}")
+                cpu.dump_core();
+                format!("{e:?}");
+                Err(e)
             })?;
 
         rx.recv().unwrap()

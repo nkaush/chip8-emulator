@@ -62,10 +62,17 @@ pub enum Instruction {
     /// If `Vx` > `Vy`, then `VF` is set to 1, otherwise 0. Then `Vy` is 
     /// subtracted from `Vx`, and the results stored in `Vx`.
     Subtract(VRegister, VRegister),
+    /// `8x_6` - `SHR Vx`: Set `Vx` = `Vx` >> 1. If the least-significant bit of 
+    /// `Vx` is 1, then VF is set to 1, otherwise 0. Then `Vx` is divided by 2.
+    ShiftRight(VRegister),
     /// `8xy7` - `SUBN Vx, Vy`: Set `Vx` = `Vy` - `Vx`, set `VF` = `NOT borrow`.
     /// If `Vy` > `Vx`, then `VF` is set to 1, otherwise 0. Then `Vx` is 
     /// subtracted from `Vy`, and the results stored in `Vx`.
     SubtractN(VRegister, VRegister),
+    /// `8xyE` - `SHL Vx`: Set `Vx` = `Vx` << 1. If the most-significant bit of 
+    /// `Vx` is 1, then `VF` is set to 1, otherwise to 0. Then `Vx` is 
+    /// multiplied by 2.
+    ShiftLeft(VRegister),
     /// `9xy0` - `SNE Vx, Vy`: Skip next instruction if `Vx` != `Vy`. The values 
     /// of `Vx` and `Vy` are compared, and if they are not equal, the program 
     /// counter is increased by 2.
@@ -145,7 +152,9 @@ impl Display for Instruction {
             Xor(vx, vy) => write!(f, "XOR {vx}, {vy}"),
             Add(vx, vy) => write!(f, "AND {vx}, {vy}"),
             Subtract(vx, vy) => write!(f, "SUB {vx}, {vy}"),
+            ShiftRight(vx) => write!(f, "SHR {vx}"),
             SubtractN(vx, vy) => write!(f, "SUBN {vx}, {vy}"),
+            ShiftLeft(vx) => write!(f, "SHL {vx}"),
             SkipIfNotEqual(vx, vy) => write!(f, "SNE {vx}, {vy}"),
             LoadI(addr) => write!(f, "LD I, {addr}"),
             JumpOffset(addr) => write!(f, "JP V0, {addr}"),
@@ -162,14 +171,6 @@ impl Display for Instruction {
         }
     }
 }
-
-// 8xy6 - SHR Vx {, Vy}
-// Set Vx = Vx SHR 1.
-// If the least-significant bit of Vx is 1, then VF is set to 1, otherwise 0. Then Vx is divided by 2.
-
-// 8xyE - SHL Vx {, Vy}
-// Set Vx = Vx SHL 1.
-// If the most-significant bit of Vx is 1, then VF is set to 1, otherwise to 0. Then Vx is multiplied by 2.
 
 // Ex9E - SKP Vx
 // Skip next instruction if key with the value of Vx is pressed.
